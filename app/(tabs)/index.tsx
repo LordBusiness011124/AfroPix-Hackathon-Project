@@ -1,0 +1,797 @@
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  Button,
+  TextInput,
+  ScrollView,
+  StyleSheet,
+  Alert,
+  Switch,
+} from 'react-native';
+import {
+  COLORS,
+  INPUT,
+  INPUT_TEXT,
+  CHAT,
+  FONT_FAMILY,
+} from '@/constants/theme';
+import { useHost } from '../../hooks/useHost';
+import { useJoin } from '../../hooks/useJoin';
+import { useChat } from '../../hooks/useChat';
+import { useLocationSharing } from '../../hooks/useLocationSharing';
+import { CrowdMapView } from '../../components/CrowdMapView';
+import { Message, HostRoomProps, JoinRoomProps } from '../../constants/types';
+import { PrimaryButton } from '@/components/PrimaryButton';
+import { CustomAlert } from '@/components/CustomAlert';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+type AlertInfo = {
+  title: string;
+  message: string;
+  buttons?: { text: string; onPress: () => void; type?: 'primary' | 'secondary' | 'danger' }[];
+};
+
+export default function MainApp() {
+  const [appState, setAppState] = useState('idle');
+  const [eventCode, setEventCode] = useState<string | null>(null);
+  const [eventName, setEventName] = useState<string | null>(null);
+
+  const [alertVisible, setAlertVisible] = useState(false);
+  const [alertInfo, setAlertInfo] = useState<AlertInfo>({
+    title: '',
+    message: '',
+    buttons: [],
+  });
+
+  function showAlert(title: string, message: string) {
+    setAlertInfo({
+      title,
+      message,
+      buttons: [{ text: 'OK', onPress: () => setAlertVisible(false), type: 'primary' }],
+    });
+    setAlertVisible(true);
+  }
+
+  const handleCreateEvent = async () => {
+    if (!eventName || eventName.trim() === '') {
+      showAlert('Error', 'Please enter an event name.');
+      return;
+    }
+
+    setAppState('creating');
+
+    try {
+      const randomCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+      await AsyncStorage.multiSet([
+        ['saved_event_code', randomCode],
+        ['saved_event_name', eventName],
+      ]);
+
+      setEventCode(randomCode);
+
+      showAlert('Success', `Event "${eventName}" created! Your code is: ${randomCode}`);
+    } catch {
+      showAlert('Error', 'Failed to save the event to your device.');
+    } finally {
+      setAppState('idle');
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      {appState === 'idle' && (
+        <View style={styles.center}>
+          <Text style={styles.title}>activistly</Text>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Enter Event Name"
+            placeholderTextColor={COLORS.textSecondary}
+            value={eventName ?? ''}
+            onChangeText={setEventName}
+          />
+          <View style={{ height: 20 }} />
+
+          <PrimaryButton title="Create an Event" onPress={handleCreateEvent} variant="primary" />
+
+          <CustomAlert
+            visible={alertVisible}
+            title={alertInfo.title}
+            message={alertInfo.message}
+            buttons={alertInfo.buttons}
+          />
+
+          <View style={{ height: 40 }} />
+          <PrimaryButton
+            title="Start Event (Organizer)"
+            onPress={() => {
+              if (eventCode !== null) {
+                setAppState('hosting');
+              } else {
+                showAlert('Error', 'No event started! Try creating an event first.');
+              }
+            }}
+            variant="primary"
+          />
+          <View style={{ height: 20 }} />
+          <PrimaryButton
+            title="Join an Event"
+            onPress={() => setAppState('joining')}
+            variant="primary"
+          />
+        </View>
+      )}
+
+      {appState === 'hosting' && (
+        <OrganizerRoom
+          eventCode={eventCode}
+          eventName={eventName}
+          onExit={() => {
+            setEventCode(null);
+            setEventName(null);
+            setAppState('idle');
+          }}
+        />
+      )}
+
+      {appState === 'joining' && (
+        <ProtestorRoom
+          onExit={() => {
+            setAppState('idle');
+          }}
+        />
+      )}
+    </View>
+  );
+}
+
+function OrganizerRoom({ eventCode, eventName, onExit }: HostRoomProps) {
+  const code = eventCode ?? '';
+  const { myPeerId, verifiedPeers, endEvent } = useHost(code, eventName);
+  const { messages, sendMessage } = useChat(verifiedPeers);
+  const [text, setText] = useState('');
+  const [showPanicModal, setShowPanicModal] = useState(false);
+  const [panicMessage, setPanicMessage] = useState('');
+  const [showCrowdMap, setShowCrowdMap] = useState(false);
+
+  const {
+    isParticipating,
+    isSharingGPS,
+    userPositions,
+    startParticipating,
+    stopParticipating,
+    startSharingGPS,
+    stopSharingGPS,
+  } = useLocationSharing(myPeerId || 'organizer', eventName || 'Organizer', verifiedPeers);
+
+  React.useEffect(() => {
+    const latestMessage = messages[messages.length - 1];
+    if (latestMessage && latestMessage.text.startsWith('PANIC')) {
+      Alert.alert('EMERGENCY ALERT', latestMessage.text.replace('PANIC', '').trim(), [
+        { text: 'OK' },
+      ]);
+    }
+  }, [messages]);
+
+  if (eventCode === null) {
+    return null;
+  }
+
+  const handleParticipatingToggle = (value: boolean) => {
+    if (value) {
+      startParticipating();
+    } else {
+      stopParticipating();
+    }
+  };
+
+  const handleGPSToggle = async (value: boolean) => {
+    if (value) {
+      await startSharingGPS();
+    } else {
+      stopSharingGPS();
+    }
+  };
+
+  const handlePanic = () => {
+    setShowPanicModal(true);
+  };
+
+  const sendPanicAlert = () => {
+    const panicText = panicMessage.trim()
+      ? `PANIC ${panicMessage.trim()}`
+      : 'PANIC EMERGENCY - Need immediate help!';
+    sendMessage(panicText);
+    setPanicMessage('');
+    setShowPanicModal(false);
+  };
+
+  const cancelPanic = () => {
+    setPanicMessage('');
+    setShowPanicModal(false);
+  };
+
+  const filteredMessages = messages.map((msg) => {
+    if (
+      typeof msg.text === 'object' ||
+      (typeof msg.text === 'string' && msg.text.includes('{type'))
+    ) {
+      return { ...msg, text: 'Someone joined' };
+    }
+    if (msg.text.startsWith('PANIC')) {
+      return { ...msg, text: 'Emergency alert sent' };
+    }
+    return msg;
+  });
+
+  return (
+    <View style={styles.full}>
+      <Text style={styles.header}>Organizing: {eventName}</Text>
+      <Text style={styles.header}>Event Code: {eventCode}</Text>
+      <Text style={styles.text}>Connected: {verifiedPeers.length} people</Text>
+
+      <View style={styles.locationSection}>
+        <View style={styles.locationRow}>
+          <Text style={styles.locationLabel}>Show me on map</Text>
+          <Switch
+            value={isParticipating}
+            onValueChange={handleParticipatingToggle}
+            trackColor={{ false: '#ccc', true: '#4CAF50' }}
+          />
+        </View>
+        {isParticipating && (
+          <View style={styles.locationRow}>
+            <Text style={styles.locationLabel}>Share my GPS</Text>
+            <Switch
+              value={isSharingGPS}
+              onValueChange={handleGPSToggle}
+              trackColor={{ false: '#ccc', true: '#2196F3' }}
+            />
+          </View>
+        )}
+        <Button
+          title={
+            userPositions.size > 0
+              ? `View Crowd Map (${userPositions.size} users)`
+              : 'View Crowd Map'
+          }
+          onPress={() => setShowCrowdMap(true)}
+        />
+        {isParticipating && !isSharingGPS && (
+          <Text style={styles.locationHint}>
+            Your position will be estimated based on nearby GPS users
+          </Text>
+        )}
+        {isSharingGPS && (
+          <Text style={styles.locationHint}>You are sharing your GPS location</Text>
+        )}
+      </View>
+
+      <ChatList messages={filteredMessages} />
+
+      <View style={styles.inputRow}>
+        <TextInput
+          style={[styles.input]}
+          value={text}
+          onChangeText={setText}
+          placeholder="Broadcast to group..."
+          placeholderTextColor={COLORS.textSecondary}
+        />
+        <View style={{ width: 20 }} />
+        <PrimaryButton
+          title="Send Blast"
+          onPress={() => {
+            sendMessage(text);
+            setText('');
+          }}
+          variant="primary"
+        />
+      </View>
+
+      <PrimaryButton
+        title="End Event"
+        onPress={() => {
+          endEvent();
+          onExit();
+        }}
+        variant="secondary"
+      />
+
+      <View style={styles.panicButtonContainer}>
+        <PrimaryButton title="PANIC ALERT" onPress={handlePanic} variant="danger" />
+      </View>
+
+      <CrowdMapView
+        visible={showCrowdMap}
+        onClose={() => setShowCrowdMap(false)}
+        userPositions={userPositions}
+        myPeerId={myPeerId || 'organizer'}
+        eventName={eventName || undefined}
+      />
+
+      {showPanicModal && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Send Panic Alert?</Text>
+            <Text style={styles.modalDescription}>
+              This will send an emergency alert to everyone nearby. You can add an optional message:
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Optional: Describe emergency..."
+              placeholderTextColor={COLORS.textSecondary}
+              value={panicMessage}
+              onChangeText={setPanicMessage}
+              multiline
+              autoFocus
+            />
+            <View style={styles.modalButtons}>
+              <PrimaryButton title="Cancel" onPress={cancelPanic} variant="secondary" />
+              <View style={{ width: 10 }} />
+              <PrimaryButton title="Send Alert" onPress={sendPanicAlert} variant="danger" />
+            </View>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function ProtestorRoom({ onExit }: JoinRoomProps) {
+  const [accessCode, setAccessCode] = useState('');
+  const [text, setText] = useState('');
+  const [showPanicModal, setShowPanicModal] = useState(false);
+  const [panicMessage, setPanicMessage] = useState('');
+  const [showCrowdMap, setShowCrowdMap] = useState(false);
+
+  const [alertVisible, setAlertVisible] = useState(false);
+  const [alertInfo, setAlertInfo] = useState<AlertInfo>({
+    title: '',
+    message: '',
+    buttons: [],
+  });
+
+  function showAlert(title: string, message: string) {
+    setAlertInfo({
+      title,
+      message,
+      buttons: [{ text: 'OK', onPress: () => setAlertVisible(false), type: 'primary' }],
+    });
+    setAlertVisible(true);
+  }
+
+  const { myPeerId, discoveredPeers, joinHost, joinState, connectedHostId, leaveRoom } =
+    useJoin('Protestor');
+
+  const { messages, sendMessage } = useChat(
+    joinState === 'IN_ROOM' && connectedHostId ? [connectedHostId] : []
+  );
+
+  const connectedPeers = joinState === 'IN_ROOM' && connectedHostId ? [connectedHostId] : [];
+  const {
+    isParticipating,
+    isSharingGPS,
+    userPositions,
+    startParticipating,
+    stopParticipating,
+    startSharingGPS,
+    stopSharingGPS,
+  } = useLocationSharing(myPeerId || 'protestor', 'Protestor', connectedPeers);
+
+  const handleParticipatingToggle = (value: boolean) => {
+    if (value) {
+      startParticipating();
+    } else {
+      stopParticipating();
+    }
+  };
+
+  const handleGPSToggle = async (value: boolean) => {
+    if (value) {
+      await startSharingGPS();
+    } else {
+      stopSharingGPS();
+    }
+  };
+
+  React.useEffect(() => {
+    const latestMessage = messages[messages.length - 1];
+    if (latestMessage && latestMessage.text.startsWith('PANIC')) {
+      Alert.alert('EMERGENCY ALERT', latestMessage.text.replace('PANIC', '').trim(), [
+        { text: 'OK' },
+      ]);
+    }
+  }, [messages]);
+
+  const handlePanic = () => {
+    setShowPanicModal(true);
+  };
+
+  const sendPanicAlert = () => {
+    const panicText = panicMessage.trim()
+      ? `PANIC ${panicMessage.trim()}`
+      : 'PANIC EMERGENCY - Need immediate help!';
+    sendMessage(panicText);
+    setPanicMessage('');
+    setShowPanicModal(false);
+  };
+
+  const cancelPanic = () => {
+    setPanicMessage('');
+    setShowPanicModal(false);
+  };
+
+  const filteredMessages = messages.map((msg) => {
+    if (
+      typeof msg.text === 'object' ||
+      (typeof msg.text === 'string' && msg.text.includes('{type'))
+    ) {
+      return { ...msg, text: 'Someone joined' };
+    }
+    if (msg.text.startsWith('PANIC')) {
+      return { ...msg, text: 'Emergency alert sent' };
+    }
+    return msg;
+  });
+
+  if (joinState === 'IN_ROOM') {
+    return (
+      <View style={styles.full}>
+        <Text style={styles.header}>Connected to Organizer</Text>
+
+        <View style={styles.locationSection}>
+          <View style={styles.locationRow}>
+            <Text style={styles.locationLabel}>Show me on map</Text>
+            <Switch
+              value={isParticipating}
+              onValueChange={handleParticipatingToggle}
+              trackColor={{ false: '#ccc', true: '#4CAF50' }}
+            />
+          </View>
+          {isParticipating && (
+            <View style={styles.locationRow}>
+              <Text style={styles.locationLabel}>Share my GPS</Text>
+              <Switch
+                value={isSharingGPS}
+                onValueChange={handleGPSToggle}
+                trackColor={{ false: '#ccc', true: '#2196F3' }}
+              />
+            </View>
+          )}
+          <Button
+            title={
+              userPositions.size > 0
+                ? `View Crowd Map (${userPositions.size} users)`
+                : 'View Crowd Map'
+            }
+            onPress={() => setShowCrowdMap(true)}
+          />
+          {isParticipating && !isSharingGPS && (
+            <Text style={styles.locationHint}>
+              Your position will be estimated based on nearby GPS users
+            </Text>
+          )}
+          {isSharingGPS && (
+            <Text style={styles.locationHint}>You are sharing your GPS location</Text>
+          )}
+        </View>
+
+        <ChatList messages={filteredMessages} />
+        <View style={styles.inputRow}>
+          <TextInput
+            style={styles.input}
+            value={text}
+            onChangeText={setText}
+            placeholder="Message the organizer..."
+            placeholderTextColor={COLORS.textSecondary}
+          />
+          <PrimaryButton
+            title="Send"
+            onPress={() => {
+              sendMessage(text);
+              setText('');
+            }}
+            variant="primary"
+          />
+        </View>
+
+        <View style={styles.panicButtonContainer}>
+          <PrimaryButton title="PANIC ALERT" onPress={handlePanic} variant="danger" />
+        </View>
+
+        <PrimaryButton
+          title="Leave"
+          onPress={() => {
+            leaveRoom();
+            onExit();
+          }}
+          variant="secondary"
+        />
+
+        <CustomAlert
+          visible={alertVisible}
+          title={alertInfo.title}
+          message={alertInfo.message}
+          buttons={alertInfo.buttons}
+        />
+
+        <CrowdMapView
+          visible={showCrowdMap}
+          onClose={() => setShowCrowdMap(false)}
+          userPositions={userPositions}
+          myPeerId={myPeerId || 'protestor'}
+        />
+
+        {showPanicModal && (
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Send Panic Alert?</Text>
+              <Text style={styles.modalDescription}>
+                This will send an emergency alert to everyone nearby. You can add an optional
+                message:
+              </Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Optional: Describe emergency..."
+                placeholderTextColor={COLORS.textSecondary}
+                value={panicMessage}
+                onChangeText={setPanicMessage}
+                multiline
+                autoFocus
+              />
+              <View style={styles.modalButtons}>
+                <PrimaryButton title="Cancel" onPress={cancelPanic} variant="secondary" />
+                <View style={{ width: 10 }} />
+                <PrimaryButton title="Send Alert" onPress={sendPanicAlert} variant="danger" />
+              </View>
+            </View>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.full}>
+      <Text style={styles.header}>Join an Event</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="Enter Access Code"
+        placeholderTextColor={COLORS.textSecondary}
+        value={accessCode}
+        onChangeText={setAccessCode}
+      />
+
+      <Text style={styles.subheader}>Available Events:</Text>
+      <ScrollView style={styles.peerList}>
+        {discoveredPeers.map((peer) => (
+          <View key={peer.peerId} style={styles.peerItem}>
+            <Text style={{ color: COLORS.textPrimary }}>{peer.name || 'Unknown Event'}</Text>
+            <PrimaryButton
+              title="Join"
+              onPress={() => {
+                if (accessCode.trim()) {
+                  joinHost(peer.peerId, accessCode);
+                } else {
+                  showAlert('Error', 'Please enter the access code first');
+                }
+              }}
+              variant="primary"
+            />
+          </View>
+        ))}
+      </ScrollView>
+
+      <View style={{ height: 20 }} />
+      <PrimaryButton title="Back" onPress={onExit} variant="primary" />
+
+      <CustomAlert
+        visible={alertVisible}
+        title={alertInfo.title}
+        message={alertInfo.message}
+        buttons={alertInfo.buttons}
+      />
+    </View>
+  );
+}
+
+function ChatList({ messages }: { messages: Message[] }) {
+  return (
+    <ScrollView style={styles.chatList}>
+      {messages.map((m) => (
+        <View key={m.id} style={[styles.msg, m.isMe ? styles.myMsg : styles.theirMsg]}>
+          <Text style={styles.msgText}>{m.text}</Text>
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  full: {
+    flex: 1,
+    padding: 40,
+    paddingTop: 60,
+  },
+  title: {
+    fontFamily: FONT_FAMILY?.mono,
+    fontSize: 32,
+    fontWeight: '600',
+    marginBottom: 40,
+    color: COLORS.textPrimary,
+  },
+  header: {
+    fontFamily: FONT_FAMILY?.sansMedium,
+    fontSize: 18,
+    fontWeight: '500',
+    marginBottom: 10,
+    color: COLORS.textSecondary,
+  },
+  subheader: {
+    fontFamily: FONT_FAMILY?.sansMedium,
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 20,
+    marginBottom: 10,
+    color: COLORS.textPrimary,
+  },
+  text: {
+    fontFamily: FONT_FAMILY?.sans,
+    fontSize: 14,
+    fontWeight: '400',
+    marginBottom: 10,
+    color: COLORS.textPrimary,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    marginBottom: 10,
+  },
+  input: {
+    height: INPUT.height,
+    backgroundColor: INPUT.bg,
+    borderWidth: 1,
+    borderColor: INPUT.border,
+    borderRadius: INPUT.radius,
+    paddingHorizontal: 10,
+    color: INPUT.text,
+    ...INPUT_TEXT,
+  },
+  chatList: {
+    flex: 1,
+    paddingVertical: 12,
+  },
+  msg: {
+    padding: 10,
+    borderRadius: CHAT.radius,
+    marginVertical: 4,
+    maxWidth: '82%',
+  },
+  myMsg: {
+    alignSelf: 'flex-end',
+    backgroundColor: CHAT.mineBg,
+  },
+  theirMsg: {
+    alignSelf: 'flex-start',
+    backgroundColor: CHAT.theirsBg,
+  },
+  msgText: {
+    fontFamily: FONT_FAMILY?.sans,
+    fontSize: 15,
+    lineHeight: 22,
+    color: CHAT.text,
+  },
+  peerList: {
+    maxHeight: 300,
+    marginBottom: 20,
+  },
+  peerItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    marginBottom: 10,
+    backgroundColor: COLORS.surface,
+  },
+  panicButtonContainer: {
+    marginVertical: 15,
+    borderWidth: 2,
+    borderColor: COLORS.danger,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  locationSection: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    padding: 12,
+    marginVertical: 10,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  locationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  locationLabel: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#333',
+  },
+  locationHint: {
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    padding: 20,
+    width: '100%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontFamily: FONT_FAMILY?.sansMedium,
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    textAlign: 'center',
+    color: COLORS.textPrimary,
+  },
+  modalDescription: {
+    fontFamily: FONT_FAMILY?.sans,
+    fontSize: 14,
+    color: COLORS.textSecondary,
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: INPUT.border,
+    borderRadius: INPUT.radius,
+    padding: 12,
+    fontSize: 16,
+    minHeight: 80,
+    textAlignVertical: 'top',
+    marginBottom: 20,
+    color: INPUT.text,
+    fontFamily: FONT_FAMILY?.sans,
+    backgroundColor: INPUT.bg,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+});
