@@ -1,11 +1,11 @@
 # Activistly
 
-Bluetooth/WiFi peer-to-peer messaging for protest organizers and participants. Works without internet.
+Bluetooth/WiFi peer-to-peer messaging for protest organizers and participants. Works completely offline — no internet connection, no shared WiFi network, and no cellular service required. Everything runs over airplane mode.
 
 ## Features
 
 - **Event Creation & Management** - Organizers create events with 6-digit access codes
-- **Bluetooth P2P Messaging** - Off-grid communication via Google Nearby Connections
+- **Bluetooth P2P Messaging** - Off-grid communication via Google Nearby Connections, no WiFi needed
 - **Broadcast Messages** - Organizers blast messages to all connected participants
 - **Panic Button** - Emergency alert system that notifies everyone instantly
 - **Crowd Map** - Live map showing participant locations with GPS + proximity estimation
@@ -18,9 +18,8 @@ Bluetooth/WiFi peer-to-peer messaging for protest organizers and participants. W
 ### Prerequisites
 
 - Two iPhones running iOS 16 or later
-- Both phones on the same WiFi network (for initial Expo Go loading)
 - A Mac or PC with Node.js 18+ installed
-- Bluetooth and WiFi enabled on both phones
+- Bluetooth enabled on both phones (no WiFi, no internet, no shared network required)
 
 ### Step 1: Install Expo Go on Both iPhones
 
@@ -56,14 +55,14 @@ This will display a QR code in your terminal.
    - Do the same thing -- scan the QR code with the Camera app
    - Tap to open in Expo Go
 
-> **Note:** Both phones must be on the same WiFi network as your computer for the QR code to work. If it does not connect, press `s` in the terminal to switch to tunnel mode, then re-scan.
+> **Note:** If the QR code does not connect, press `s` in the terminal to switch to tunnel mode, then re-scan.
 
 ### Step 5: Grant Permissions
 
 When the app opens on each phone, it will ask for permissions. **Accept all of them**:
 - **Bluetooth** - Required for P2P communication
 - **Location** - Required for the crowd map feature
-- **Local Network** (iOS) - Required for device discovery
+- **Local Network** (iOS) - Required for Bluetooth device discovery (no actual network connection needed)
 
 ---
 
@@ -153,7 +152,7 @@ Scan the QR code from within the installed development build (not Expo Go).
 
 | Problem | Solution |
 |---|---|
-| QR code does not connect | Press `s` in terminal for tunnel mode, or ensure phones are on same WiFi |
+| QR code does not connect | Press `s` in terminal for tunnel mode and re-scan |
 | Bluetooth not working | You need a development build, not Expo Go (see above) |
 | Event not appearing in discovery | Make sure both phones have Bluetooth ON and are within ~30 feet |
 | Location not showing on map | Tap "Show me on map" and grant location permission when prompted |
